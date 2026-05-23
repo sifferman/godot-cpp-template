@@ -124,8 +124,8 @@ jobs:
         run: |
           set -euo pipefail
           ls -lR project/bin
-          test -f project/bin/linux/libgdexample.linux.template_debug.x86_64.so
-          test -f project/bin/web/libgdexample.web.template_release.wasm32.nothreads.wasm
+          test -f project/bin/linux/libEXTENSION-NAME.linux.template_debug.x86_64.so
+          test -f project/bin/web/libEXTENSION-NAME.web.template_release.wasm32.nothreads.wasm
 
       - name: Install Godot ${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
         run: |
@@ -139,7 +139,7 @@ jobs:
           echo "$HOME" >> "$GITHUB_PATH"
           "$HOME/godot" --version
 
-      - name: godot --headless --import (expected to SEGV inside libgdexample.so)
+      - name: godot --headless --import (expected to SEGV inside libEXTENSION-NAME.so)
         run: |
           set -euo pipefail
           cd project
@@ -147,8 +147,8 @@ jobs:
           godot --headless --import 2>&1 | tee "$import_log" || true
           godot --headless --import 2>&1 | tee -a "$import_log"
           if grep -qF 'handle_crash: Program crashed with signal' "$import_log"; then
-            echo "::error::Confirmed: godot --headless --import SEGV'd inside libgdexample.so with both linux+web binaries on disk."
-            grep -nE 'handle_crash|signal 11|libgdexample|example_library_init|stack smashing' "$import_log" | head -20
+            echo "::error::Confirmed: godot --headless --import SEGV'd inside libEXTENSION-NAME.so with both linux+web binaries on disk."
+            grep -nE 'handle_crash|signal 11|libEXTENSION-NAME|example_library_init|stack smashing' "$import_log" | head -20
             exit 1
           fi
           echo "No crash observed — the multi-platform-binary hypothesis was wrong."
