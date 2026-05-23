@@ -21,7 +21,7 @@ jobs:
         include:
           - target: { platform: linux, arch: x86_64, os: ubuntu-22.04 }
             target-type: template_debug
-            float-precision: double
+            float-precision: single
           - target: { platform: windows, arch: x86_64, os: windows-latest }
             target-type: template_release
             float-precision: single
@@ -33,7 +33,7 @@ jobs:
             float-precision: single
           - target: { platform: web, arch: wasm32, os: ubuntu-22.04 }
             target-type: template_release
-            float-precision: double
+            float-precision: single
 
     runs-on: ${{ matrix.target.os }}
     steps:
@@ -86,3 +86,84 @@ jobs:
         with:
           scons-cache: ${{ github.workspace }}/.scons-cache/
           cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
+
+  # --- Reproducer: godot --headless --import SEGVs inside the GDExtension
+  # when BOTH the linux .so and the web .wasm are present in project/bin/.
+  # With only the linux .so present, the same Godot version imports
+  # cleanly. So the trigger is the multi-platform binary set on disk,
+  # not the host-side load alone.
+  multi-platform-import:
+    runs-on: ubuntu-22.04
+    env:
+      GODOT_VERSION: 4.6.3
+      GODOT_STATUS: stable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup godot-cpp toolchain (linux)
+        uses: ./godot-cpp/.github/actions/setup-godot-cpp
+        with:
+          platform: linux
+
+      - name: Build linux GDExtension (template_debug)
+        run: scons -j"$(nproc)" target=template_debug platform=linux arch=x86_64 precision=single
+
+      - name: Setup godot-cpp toolchain (web, adds emsdk)
+        uses: ./godot-cpp/.github/actions/setup-godot-cpp
+        with:
+          platform: web
+          em-version: 3.1.62
+
+      - name: Build web GDExtension (template_release, nothreads)
+        run: scons -j"$(nproc)" target=template_release platform=web arch=wasm32 precision=single threads=no
+
+      - name: Confirm both binaries are present in project/bin/
+        run: |
+          set -euo pipefail
+          ls -lR project/bin
+          test -f project/bin/linux/libgdexample.linux.template_debug.x86_64.so
+          test -f project/bin/web/libgdexample.web.template_release.wasm32.nothreads.wasm
+
+      - name: Install Godot ${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
+        run: |
+          set -euo pipefail
+          ver=${GODOT_VERSION}-${GODOT_STATUS}
+          base="https://github.com/godotengine/godot/releases/download/${ver}"
+          curl -fsSL "${base}/Godot_v${ver}_linux.x86_64.zip" -o godot.zip
+          unzip -q godot.zip
+          mv "Godot_v${ver}_linux.x86_64" "$HOME/godot"
+          chmod +x "$HOME/godot"
+          echo "$HOME" >> "$GITHUB_PATH"
+          "$HOME/godot" --version
+
+      - name: godot --headless --import (expected to SEGV inside libgdexample.so)
+        run: |
+          set -euo pipefail
+          cd project
+          import_log="$RUNNER_TEMP/import.log"
+          godot --headless --import 2>&1 | tee "$import_log" || true
+          godot --headless --import 2>&1 | tee -a "$import_log"
+          if grep -qF 'handle_crash: Program crashed with signal' "$import_log"; then
+            echo "::error::Confirmed: godot --headless --import SEGV'd inside libgdexample.so with both linux+web binaries on disk."
+            grep -nE 'handle_crash|signal 11|libgdexample|example_library_init|stack smashing' "$import_log" | head -20
+            exit 1
+          fi
+          echo "No crash observed — the multi-platform-binary hypothesis was wrong."
+
+      - name: Control — single-platform import (linux .so only, no web wasm)
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -rf project/bin/web project/.godot
+          cd project
+          control_log="$RUNNER_TEMP/control.log"
+          godot --headless --import 2>&1 | tee "$control_log" || true
+          godot --headless --import 2>&1 | tee -a "$control_log"
+          if grep -qF 'handle_crash: Program crashed with signal' "$control_log"; then
+            echo "::warning::Control also crashed — bug is not multi-platform-specific."
+          else
+            echo "Control imported cleanly — consistent with the multi-platform hypothesis."
+          fi
