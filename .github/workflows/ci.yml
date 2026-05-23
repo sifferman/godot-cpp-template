@@ -21,7 +21,7 @@ jobs:
         include:
           - target: { platform: linux, arch: x86_64, os: ubuntu-22.04 }
             target-type: template_debug
-            float-precision: double
+            float-precision: single
           - target: { platform: windows, arch: x86_64, os: windows-latest }
             target-type: template_release
             float-precision: single
@@ -86,3 +86,46 @@ jobs:
         with:
           scons-cache: ${{ github.workspace }}/.scons-cache/
           cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
+
+      # --- Reproducer: godot --headless --import SEGVs inside the GDExtension on Godot 4.5 ---
+      - name: Install Godot 4.5-stable
+        if: ${{ matrix.target.platform == 'linux' && matrix.target.arch == 'x86_64' }}
+        run: |
+          set -euo pipefail
+          ver=4.5-stable
+          base="https://github.com/godotengine/godot/releases/download/${ver}"
+          curl -fsSL "${base}/Godot_v${ver}_linux.x86_64.zip" -o godot.zip
+          unzip -q godot.zip
+          mv "Godot_v${ver}_linux.x86_64" "$HOME/godot"
+          chmod +x "$HOME/godot"
+          echo "$HOME" >> "$GITHUB_PATH"
+          "$HOME/godot" --version
+
+      - name: godot --headless --import (expected to SEGV)
+        if: ${{ matrix.target.platform == 'linux' && matrix.target.arch == 'x86_64' }}
+        run: |
+          set -euo pipefail
+          cd project
+          headless_log="$RUNNER_TEMP/headless.log"
+          godot --headless --import 2>&1 | tee "$headless_log" || true
+          godot --headless --import 2>&1 | tee -a "$headless_log"
+          if grep -qF 'handle_crash: Program crashed with signal' "$headless_log"; then
+            echo "::error::Confirmed: godot --headless --import SEGV'd inside the GDExtension."
+            grep -nE 'handle_crash|signal 11|example_library_init|libgdexample|stack smashing' "$headless_log" | head -20
+            exit 1
+          fi
+          echo "No crash observed."
+
+      - name: xvfb-run godot --import (control — should succeed)
+        if: ${{ always() && matrix.target.platform == 'linux' && matrix.target.arch == 'x86_64' }}
+        run: |
+          set -euo pipefail
+          cd project
+          xvfb_log="$RUNNER_TEMP/xvfb.log"
+          xvfb-run -a godot --import 2>&1 | tee "$xvfb_log" || true
+          xvfb-run -a godot --import 2>&1 | tee -a "$xvfb_log"
+          if grep -qF 'handle_crash: Program crashed with signal' "$xvfb_log"; then
+            echo "::warning::xvfb-run also crashed — deviation from godot#111645 workaround."
+          else
+            echo "xvfb-run completed without crash."
+          fi
