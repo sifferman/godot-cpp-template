@@ -88,11 +88,11 @@ jobs:
           cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
 
       # --- Reproducer: godot --headless --import SEGVs inside the GDExtension on Godot 4.5 ---
-      - name: Install Godot 4.5-stable
+      - name: Install Godot 4.6.3-stable (latest)
         if: ${{ matrix.target.platform == 'linux' && matrix.target.arch == 'x86_64' }}
         run: |
           set -euo pipefail
-          ver=4.5-stable
+          ver=4.6.3-stable
           base="https://github.com/godotengine/godot/releases/download/${ver}"
           curl -fsSL "${base}/Godot_v${ver}_linux.x86_64.zip" -o godot.zip
           unzip -q godot.zip
